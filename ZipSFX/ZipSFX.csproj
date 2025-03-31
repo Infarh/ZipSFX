@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>zsfx</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy.Mdd.Hmm"))</Version>
+
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <OptimizationPreference>Size</OptimizationPreference>
+
+    <EventSourceSupport>false</EventSourceSupport>
+
+  </PropertyGroup>
+
+</Project>
