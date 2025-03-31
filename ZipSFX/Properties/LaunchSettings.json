@@ -2,7 +2,7 @@
   "profiles": {
     "zsfx": {
       "commandName": "Project",
-      "commandLineArgs": ""
+      "commandLineArgs": "data.zip"
     }
   }
 }

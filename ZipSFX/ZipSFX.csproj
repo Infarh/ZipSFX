@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>zsfx</AssemblyName>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>0.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy.Mdd.Hmm"))</Version>
@@ -19,5 +19,9 @@
     <EventSourceSupport>false</EventSourceSupport>
 
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="data.zip" CopyToOutputDirectory="PreserveNewest"/>
+  </ItemGroup>
 
 </Project>
