@@ -18,9 +18,17 @@ internal sealed class CustomCRC
         var crc = _Value;
         var end = Offset + Count;
         for (var i = Offset; i < end; i++)
-        {
             crc = __Table[(crc ^ Buffer[i]) & 0xFF] ^ (crc >> 8);
-        }
+        _Value = crc;
+    }
+
+    /// <summary>Обновляет CRC данными буфера</summary>
+    /// <param name="Buffer">Буфер данных</param>
+    public void Update(Span<byte> Buffer)
+    {
+        var crc = _Value;
+        foreach (var b in Buffer)
+            crc = __Table[(crc ^ b) & 0xFF] ^ (crc >> 8);
         _Value = crc;
     }
 

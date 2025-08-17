@@ -1,51 +1,107 @@
-﻿using System.IO.Compression;
+﻿using System.Buffers;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 
 using ZipSFX;
 
-//if (args is [{ Length: > 0 } archive_file_name, ..])
-//    CreateSfxArchive(archive_file_name);
-//else
-//    ExtractArchive();
+// ------------------------------------------------------------
+// Универсальный SFX-модуль
+// Режимы запуска:
+// 1) <exe> <path>.zip           — создать SFX-архив: [модуль] + [zip]
+// 2) <exe> [extractPath?]       — распаковать присоединённый архив в каталог (текущий, если не указан)
+// ------------------------------------------------------------
 
-const string data_file_name = "data.zip";
-const string exe_file_name = "data.exe";
-
-var data_file = new FileInfo(data_file_name);
-
-if (!data_file.Exists)
-    throw new FileNotFoundException($"Файл {data_file_name} не найден.");
-
-var exe_file = CreateSfxArchive(data_file_name);
-
-
-
-Console.WriteLine("End.");
-
-return;
-
-static string GetCurrentAppFilePath() => Path.Combine(AppContext.BaseDirectory, $"{AppDomain.CurrentDomain.FriendlyName}.exe");
-
-static FileInfo CreateSfxArchive(string ZipFilePath)
+// Точка входа: разбираем аргументы командной строки
+if (args.Length > 0)
 {
-    var sfx_file_path = Path.ChangeExtension(ZipFilePath, ".exe");
+    var arg0 = args[0];
 
-    using var sfx_file_stream = File.Create(sfx_file_path);
-    var exe_file_location = GetCurrentAppFilePath();
-    using var current_exe_stream = File.OpenRead(exe_file_location);
+    // Если указан существующий файл с расширением .zip — выполняем слияние
+    if (File.Exists(arg0) && string.Equals(Path.GetExtension(arg0), ".zip", StringComparison.OrdinalIgnoreCase))
+    {
+        CreateSfxArchive(arg0);
+        return;
+    }
 
-    current_exe_stream.CopyTo(sfx_file_stream);
+    // Иначе — это путь распаковки (каталог). Если по этому пути лежит zip-файл — это конфликт, но по ТЗ трактуем как режим слияния
+    if (File.Exists(arg0) && string.Equals(Path.GetExtension(arg0), ".zip", StringComparison.OrdinalIgnoreCase))
+    {
+        CreateSfxArchive(arg0);
+        return;
+    }
 
-    using var zip_file_stream = File.OpenRead(ZipFilePath);
-    zip_file_stream.CopyTo(sfx_file_stream);
-
-    Console.WriteLine($"SFX-архив создан: {sfx_file_path}");
-
-    return new(sfx_file_path);
+    // Иначе — распаковка в указанный каталог (создадим при необходимости)
+    ExtractArchive(arg0);
+    return;
 }
 
-static void ExtractArchive()
+// Без аргументов: если архив присоединён — распаковываем в текущий каталог
+if (HasAttachedArchive())
 {
+    ExtractArchive(Environment.CurrentDirectory);
+    return;
+}
+
+const string? hint_str = """
+ Аргументы не указаны и архив не присоединён. Нечего делать.
+ ------------------------------------------------------------
+ Универсальный SFX-модуль
+ Режимы запуска:
+ 1) <exe> <path>.zip           — создать SFX-архив: [модуль] + [zip]
+ 2) <exe> [extractPath?]       — распаковать присоединённый архив в каталог (текущий, если не указан)
+ ------------------------------------------------------------
+ """;
+Console.WriteLine(hint_str);
+return;
+
+///// <summary>Возвращает путь к текущему исполняемому файлу</summary>
+static string GetCurrentAppFilePath() => Path.Combine(AppContext.BaseDirectory, $"{AppDomain.CurrentDomain.FriendlyName}.exe");
+
+///// <summary>Определяет, присоединён ли к текущему exe архив</summary>
+static bool HasAttachedArchive()
+{
+    var exe_path = GetCurrentAppFilePath();
+    using var exe_stream = File.OpenRead(exe_path);
+    return FindEndOfCentralDirectory(exe_stream) is not null;
+}
+
+///// <summary>Создаёт SFX-архив: [модуль] + [zip]</summary>
+///// <param name="ZipFilePath">Путь к исходному zip-файлу</param>
+static FileInfo CreateSfxArchive(string ZipFilePath)
+{
+    if (!File.Exists(ZipFilePath))
+        throw new FileNotFoundException($"Файл {ZipFilePath} не найден.");
+
+    var output_path = Path.ChangeExtension(ZipFilePath, ".exe");
+
+    // 1) Определяем длину SFX-модуля в текущем exe (исключая присоединённый zip, если он есть)
+    var exe_path = GetCurrentAppFilePath();
+    using var exe_stream = File.OpenRead(exe_path);
+    var sfx_length = GetSfxModuleLength(exe_stream); // длина области модуля в текущем exe
+
+    // 2) Записываем в выходной файл: [модуль] + [zip]
+    using var out_stream = File.Create(output_path);
+
+    // Копируем модуль
+    CopyExact(exe_stream, out_stream, sfx_length);
+
+    // Копируем содержимое zip-файла
+    using (var zip_stream = File.OpenRead(ZipFilePath))
+        zip_stream.CopyTo(out_stream);
+
+    Console.WriteLine($"SFX-архив создан: {output_path}");
+    return new(output_path);
+}
+
+///// <summary>Распаковывает присоединённый к текущему exe архив</summary>
+///// <param name="DestinationDirectory">Каталог распаковки; если null или пустая строка — текущий каталог</param>
+static void ExtractArchive(string? DestinationDirectory = null)
+{
+    var dest_dir = string.IsNullOrWhiteSpace(DestinationDirectory) ? Environment.CurrentDirectory : DestinationDirectory!;
+
+    // Убеждаемся, что каталог существует
+    Directory.CreateDirectory(dest_dir);
+
     var exe_path = GetCurrentAppFilePath();
 
     using var exe_stream = File.OpenRead(exe_path);
@@ -65,9 +121,24 @@ static void ExtractArchive()
 
     // Распаковка файлов согласно центральному каталогу
     foreach (var entry in central_directory.Entries)
-        ExtractFile(exe_stream, entry, eocd.ZipBaseOffset);
+        ExtractFile(exe_stream, entry, eocd.ZipBaseOffset, dest_dir);
 }
 
+///// <summary>Вычисляет длину области SFX-модуля в заданном потоке exe</summary>
+///// <param name="ExeStream">Поток текущего исполняемого файла</param>
+///// <returns>Длина части файла, соответствующей самому модулю (без присоединённого zip)</returns>
+static long GetSfxModuleLength(Stream ExeStream)
+{
+    // Если архив присоединён — длина модуля = смещение начала zip-потока (ZipBaseOffset)
+    // Иначе — длина модуля = длина всего файла
+    if (FindEndOfCentralDirectory(ExeStream) is { } eocd)
+        return eocd.ZipBaseOffset;
+
+    return ExeStream.Length;
+}
+
+///// <summary>Ищет EOCD (End Of Central Directory) в конце потока и возвращает его параметры</summary>
+///// <param name="ExeStream">Поток файла (exe или zip)</param>
 static EndOfCentralDirectory? FindEndOfCentralDirectory(Stream ExeStream)
 {
     // Поиск EOCD (0x06054b50) с конца потока, максимально 64К + фиксированный размер
@@ -88,13 +159,13 @@ static EndOfCentralDirectory? FindEndOfCentralDirectory(Stream ExeStream)
             continue;
 
         var span = buffer.AsSpan(i);
-        var disk_no = MemoryMarshal.Read<ushort>(span.Slice(4));
-        var cd_disk_no = MemoryMarshal.Read<ushort>(span.Slice(6));
-        var disk_entries = MemoryMarshal.Read<ushort>(span.Slice(8));
-        var total_entries = MemoryMarshal.Read<ushort>(span.Slice(10));
-        var cd_size = MemoryMarshal.Read<uint>(span.Slice(12));
-        var cd_offset = MemoryMarshal.Read<uint>(span.Slice(16));
-        var comment_len = MemoryMarshal.Read<ushort>(span.Slice(20));
+        var disk_no = MemoryMarshal.Read<ushort>(span[4..]);
+        var cd_disk_no = MemoryMarshal.Read<ushort>(span[6..]);
+        var disk_entries = MemoryMarshal.Read<ushort>(span[8..]);
+        var total_entries = MemoryMarshal.Read<ushort>(span[10..]);
+        var cd_size = MemoryMarshal.Read<uint>(span[12..]);
+        var cd_offset = MemoryMarshal.Read<uint>(span[16..]);
+        var comment_len = MemoryMarshal.Read<ushort>(span[20..]);
 
         // Поддерживаем только однотомные архивы
         if (disk_no != 0 || cd_disk_no != 0 || disk_entries != total_entries)
@@ -119,12 +190,18 @@ static EndOfCentralDirectory? FindEndOfCentralDirectory(Stream ExeStream)
     return null;
 }
 
-static void ExtractFile(Stream ZipStream, ZipCentralDirectoryEntry entry, long BaseOffset)
+///// <summary>Распаковывает одну запись zip в указанный каталог</summary>
+///// <param name="ZipStream">Поток, из которого читаются данные (exe с присоединённым zip)</param>
+///// <param name="entry">Запись центрального каталога</param>
+///// <param name="BaseOffset">Абсолютное смещение начала zip-потока</param>
+///// <param name="DestinationRoot">Корневой каталог распаковки</param>
+static void ExtractFile(Stream ZipStream, ZipCentralDirectoryEntry entry, long BaseOffset, string DestinationRoot)
 {
-    // Создание каталогов при необходимости
+    // Поддержка каталогов
     if (entry.FileName.EndsWith('/'))
     {
-        Directory.CreateDirectory(entry.FileName);
+        var dir_path = Path.Combine(DestinationRoot, entry.FileName.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(dir_path);
         return;
     }
 
@@ -138,59 +215,116 @@ static void ExtractFile(Stream ZipStream, ZipCentralDirectoryEntry entry, long B
 
     ZipStream.Position = data_start;
 
-    // Извлечение: поддерживаем методы 0 (Stored) и 8 (Deflate)
-    var file_dir = Path.GetDirectoryName(entry.FileName);
+    // Путь к файлу назначения
+    var rel_path = entry.FileName.Replace('/', Path.DirectorySeparatorChar);
+    var target_path = Path.Combine(DestinationRoot, rel_path);
+    var file_dir = Path.GetDirectoryName(target_path);
     if (!string.IsNullOrEmpty(file_dir))
         Directory.CreateDirectory(file_dir);
 
-    using var file_stream = File.Create(entry.FileName);
+    using var file_stream = File.Create(target_path);
     var crc = new CustomCRC();
 
-    if (entry.CompressionMethod == 0)
+    switch (entry.CompressionMethod)
     {
-        CopyLimitedWithCrc(ZipStream, file_stream, entry.CompressedSize, crc);
-    }
-    else if (entry.CompressionMethod == 8)
-    {
-        using var limited = new SubReadStream(ZipStream, entry.CompressedSize);
-        using var deflate = new DeflateStream(limited, CompressionMode.Decompress, leaveOpen: false);
-        CopyAllWithCrc(deflate, file_stream, crc);
-    }
-    else
-    {
-        Console.WriteLine($"Метод сжатия {entry.CompressionMethod} не поддерживается для файла {entry.FileName}");
+        case 0:
+            CopyLimitedWithCrc(ZipStream, file_stream, entry.CompressedSize, crc);
+            break;
+
+        case 8:
+            using (var limited = new SubReadStream(ZipStream, entry.CompressedSize))
+            using (var deflate = new DeflateStream(limited, CompressionMode.Decompress, leaveOpen: false))
+                CopyAllWithCrc(deflate, file_stream, crc);
+            break;
+
+        default:
+            Console.WriteLine($"Метод сжатия {entry.CompressionMethod} не поддерживается для файла {entry.FileName}");
+            break;
     }
 
     var actual_crc = crc.FinalizeHash();
     if (actual_crc != entry.Crc32)
         throw new InvalidDataException($"CRC mismatch for {entry.FileName}: expected 0x{entry.Crc32:X8}, actual 0x{actual_crc:X8}");
 
-    Console.WriteLine($"Файл распакован: {entry.FileName}");
+    Console.WriteLine($"Файл распакован: {target_path}");
 }
 
-static void CopyLimitedWithCrc(Stream Source, Stream Destination, uint Count, CustomCRC Crc)
+///// <summary>Копирует из исходного потока ровно указанное количество байт</summary>
+///// <param name="Source">Источник</param>
+///// <param name="Destination">Назначение</param>
+///// <param name="Count">Количество байт</param>
+static void CopyExact(Stream Source, Stream Destination, long Count)
 {
-    var buffer = new byte[8192];
-    var remaining = (long)Count;
-    while (remaining > 0)
+    const int buffer_size = 8192;
+    var buffer_array = ArrayPool<byte>.Shared.Rent(buffer_size);
+    var buffer = buffer_array.AsSpan(0, buffer_size);
+
+    try
     {
-        var to_read = (int)Math.Min(buffer.Length, remaining);
-        var read = Source.Read(buffer, 0, to_read);
-        if (read <= 0) break;
-        Destination.Write(buffer, 0, read);
-        Crc.Update(buffer, 0, read);
-        remaining -= read;
+        var remaining = Count;
+        while (remaining > 0)
+        {
+            var to_read = (int)Math.Min(buffer.Length, remaining);
+            var read = Source.Read(buffer[..to_read]);
+            if (read <= 0)
+                throw new EndOfStreamException("Неожиданный конец потока при копировании модуля");
+
+            Destination.Write(buffer[..read]);
+            remaining -= read;
+        }
+    }
+    finally
+    {
+        ArrayPool<byte>.Shared.Return(buffer_array);
     }
 }
 
+///// <summary>Копирует ограниченное количество байт с подсчётом CRC-32</summary>
+static void CopyLimitedWithCrc(Stream Source, Stream Destination, uint Count, CustomCRC Crc)
+{
+    const int buffer_size = 8192;
+    var buffer_array = ArrayPool<byte>.Shared.Rent(buffer_size);
+    var buffer = buffer_array.AsSpan(0, buffer_size);
+    try
+    {
+        var remaining = (long)Count;
+
+        while (remaining > 0)
+        {
+            var to_read = (int)Math.Min(buffer.Length, remaining);
+            var read = Source.Read(buffer[..to_read]);
+            if (read <= 0) break;
+
+            Destination.Write(buffer[..read]);
+            Crc.Update(buffer[..read]);
+
+            remaining -= read;
+        }
+    }
+    finally
+    {
+        ArrayPool<byte>.Shared.Return(buffer_array);
+    }
+}
+
+///// <summary>Копирует все данные из потока с подсчётом CRC-32</summary>
 static void CopyAllWithCrc(Stream Source, Stream Destination, CustomCRC Crc)
 {
-    var buffer = new byte[8192];
-    int read;
-    while ((read = Source.Read(buffer, 0, buffer.Length)) > 0)
+    const int buffer_size = 8192;
+    var buffer_array = ArrayPool<byte>.Shared.Rent(buffer_size);
+    var buffer = buffer_array.AsSpan(0, buffer_size);
+    try
     {
-        Destination.Write(buffer, 0, read);
-        Crc.Update(buffer, 0, read);
+        int read;
+        while ((read = Source.Read(buffer)) > 0)
+        {
+            Destination.Write(buffer_array, 0, read);
+            Crc.Update(buffer_array, 0, read);
+        }
+    }
+    finally
+    {
+        ArrayPool<byte>.Shared.Return(buffer_array);
     }
 }
 
@@ -206,20 +340,12 @@ file struct EndOfCentralDirectory
 }
 
 /// <summary>Поток для чтения ограниченного диапазона базового потока</summary>
-file sealed class SubReadStream : Stream
+file sealed class SubReadStream(Stream Base, uint Length) : Stream
 {
-    private readonly Stream _Base;
-    private readonly long _Start;
-    private readonly long _Length;
-    private long _Position;
-
-    public SubReadStream(Stream Base, uint Length)
-    {
-        _Base = Base;
-        _Start = Base.Position;
-        _Length = Length;
-        _Position = 0;
-    }
+    private readonly Stream _Base = Base;
+    private readonly long _Start = Base.Position;
+    private readonly long _Length = Length;
+    private long _Position = 0;
 
     public override bool CanRead => true;
     public override bool CanSeek => true;
@@ -231,10 +357,13 @@ file sealed class SubReadStream : Stream
     {
         var remaining = _Length - _Position;
         if (remaining <= 0) return 0;
+
         var to_read = (int)Math.Min(count, remaining);
         _Base.Position = _Start + _Position;
+
         var read = _Base.Read(buffer, offset, to_read);
         _Position += read;
+
         return read;
     }
 
@@ -247,14 +376,18 @@ file sealed class SubReadStream : Stream
             SeekOrigin.End => _Length + offset,
             _ => throw new ArgumentOutOfRangeException(nameof(origin))
         };
+
         if (new_pos < 0 || new_pos > _Length)
             throw new IOException("Выход за пределы поддиапазона");
+
         _Position = new_pos;
         return _Position;
     }
 
     public override void Flush() => throw new NotSupportedException();
+
     public override void SetLength(long value) => throw new NotSupportedException();
+
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }
 
