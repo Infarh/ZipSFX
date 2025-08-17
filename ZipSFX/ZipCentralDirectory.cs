@@ -8,18 +8,31 @@ internal class ZipCentralDirectory
     /// <summary>Список записей центрального каталога</summary>
     public IReadOnlyList<ZipCentralDirectoryEntry> Entries => _Entries;
 
-    /// <summary>Читает записи центрального каталога из потока</summary>
+    /// <summary>Читает записи центрального каталога из потока начиная с позиции EOCD.CentralDirectoryOffset</summary>
     /// <param name="stream">Поток данных zip-файла</param>
     public void Read(Stream stream)
     {
         var entries = new List<ZipCentralDirectoryEntry>();
 
-        // Пример чтения записей центрального каталога
+        // Чтение подряд записей до конца каталога невозможно без длины каталога,
+        // поэтому метод предполагает, что позиция в потоке установлена на начало каталога,
+        // а конец известен вызывающей стороне. Здесь читаем до первой ошибки сигнатуры.
+        var start_position = stream.Position;
         while (stream.Position < stream.Length)
         {
-            var entry = new ZipCentralDirectoryEntry();
-            entry.Read(stream);
-            entries.Add(entry);
+            var prev_pos = stream.Position;
+            try
+            {
+                var entry = new ZipCentralDirectoryEntry();
+                entry.Read(stream);
+                entries.Add(entry);
+            }
+            catch
+            {
+                // Возвращаемся на предыдущую позицию и прекращаем чтение
+                stream.Position = prev_pos;
+                break;
+            }
         }
 
         _Entries = [.. entries];

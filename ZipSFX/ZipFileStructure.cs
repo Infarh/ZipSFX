@@ -5,7 +5,6 @@
 /// <param name="data">Поток данных zip-файла</param>
 internal class ZipFileStructure(Stream data)
 {
-
     /// <summary>Читает центральный каталог из zip-файла</summary>
     /// <returns>Центральный каталог zip-файла</returns>
     public ZipCentralDirectory ReadCentralDirectory()
