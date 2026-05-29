@@ -12,10 +12,8 @@ using ZipSFX;
 // ------------------------------------------------------------
 
 // Точка входа: разбираем аргументы командной строки
-if (args.Length > 0)
+if (args is [{ Length: > 0 } arg0, ..])
 {
-    var arg0 = args[0];
-
     // Если указан существующий файл с расширением .zip — выполняем слияние
     if (File.Exists(arg0) && string.Equals(Path.GetExtension(arg0), ".zip", StringComparison.OrdinalIgnoreCase))
     {
@@ -76,14 +74,16 @@ static FileInfo CreateSfxArchive(string ZipFilePath)
 
     // 1) Определяем длину SFX-модуля в текущем exe (исключая присоединённый zip, если он есть)
     var exe_path = GetCurrentAppFilePath();
-    using var exe_stream = File.OpenRead(exe_path);
-    var sfx_length = GetSfxModuleLength(exe_stream); // длина области модуля в текущем exe
+    long sfx_length; // длина области модуля в текущем exe
+    using (var exe_stream = File.OpenRead(exe_path))
+        sfx_length = GetSfxModuleLength(exe_stream);
 
     // 2) Записываем в выходной файл: [модуль] + [zip]
     using var out_stream = File.Create(output_path);
 
     // Копируем модуль
-    CopyExact(exe_stream, out_stream, sfx_length);
+    using (var exe_stream = File.OpenRead(exe_path))
+        CopyExact(exe_stream, out_stream, sfx_length);
 
     // Копируем содержимое zip-файла
     using (var zip_stream = File.OpenRead(ZipFilePath))
@@ -145,46 +145,56 @@ static EndOfCentralDirectory? FindEndOfCentralDirectory(Stream ExeStream)
     const uint eocd_signature = 0x06054b50;
     const int max_comment = 0xFFFF;
     const int eocd_fixed = 22; // минимальный размер EOCD без комментария
+    const int total_search_length = max_comment + eocd_fixed;
 
-    var search_size = (int)Math.Min(ExeStream.Length, max_comment + eocd_fixed);
+    var search_size = (int)Math.Min(ExeStream.Length, total_search_length);
     var search_start = ExeStream.Length - search_size;
     ExeStream.Position = search_start;
 
-    var buffer = new byte[search_size];
-    _ = ExeStream.Read(buffer, 0, buffer.Length);
+    var buffer_array = ArrayPool<byte>.Shared.Rent(search_size);
+    var buffer = buffer_array.AsSpan(0, search_size);
 
-    for (var i = buffer.Length - eocd_fixed; i >= 0; i--)
+    try
     {
-        if (MemoryMarshal.Read<uint>(buffer.AsSpan(i)) != eocd_signature)
-            continue;
+        ExeStream.ReadExactly(buffer);
 
-        var span = buffer.AsSpan(i);
-        var disk_no = MemoryMarshal.Read<ushort>(span[4..]);
-        var cd_disk_no = MemoryMarshal.Read<ushort>(span[6..]);
-        var disk_entries = MemoryMarshal.Read<ushort>(span[8..]);
-        var total_entries = MemoryMarshal.Read<ushort>(span[10..]);
-        var cd_size = MemoryMarshal.Read<uint>(span[12..]);
-        var cd_offset = MemoryMarshal.Read<uint>(span[16..]);
-        var comment_len = MemoryMarshal.Read<ushort>(span[20..]);
-
-        // Поддерживаем только однотомные архивы
-        if (disk_no != 0 || cd_disk_no != 0 || disk_entries != total_entries)
-            return null;
-
-        var eocd_abs = search_start + i; // абсолютная позиция EOCD в файле
-        var cd_end_abs = eocd_abs;       // центральный каталог заканчивается перед EOCD
-        var cd_start_abs = cd_end_abs - cd_size;
-        var zip_base = cd_start_abs - cd_offset; // смещение начала zip-потока в SFX-файле
-
-        return new EndOfCentralDirectory
+        for (var i = buffer.Length - eocd_fixed; i >= 0; i--)
         {
-            CentralDirectorySize = cd_size,
-            CentralDirectoryOffset = cd_offset,
-            CommentLength = comment_len,
-            EocdAbsoluteOffset = eocd_abs,
-            CentralDirectoryAbsoluteStart = cd_start_abs,
-            ZipBaseOffset = zip_base
-        };
+            if (MemoryMarshal.Read<uint>(buffer[i..]) != eocd_signature)
+                continue;
+
+            var span = buffer[i..];
+            var disk_no = MemoryMarshal.Read<ushort>(span[4..]);
+            var cd_disk_no = MemoryMarshal.Read<ushort>(span[6..]);
+            var disk_entries = MemoryMarshal.Read<ushort>(span[8..]);
+            var total_entries = MemoryMarshal.Read<ushort>(span[10..]);
+            var cd_size = MemoryMarshal.Read<uint>(span[12..]);
+            var cd_offset = MemoryMarshal.Read<uint>(span[16..]);
+            var comment_len = MemoryMarshal.Read<ushort>(span[20..]);
+
+            // Поддерживаем только однотомные архивы
+            if (disk_no != 0 || cd_disk_no != 0 || disk_entries != total_entries)
+                return null;
+
+            var eocd_abs = search_start + i; // абсолютная позиция EOCD в файле
+            var cd_end_abs = eocd_abs;       // центральный каталог заканчивается перед EOCD
+            var cd_start_abs = cd_end_abs - cd_size;
+            var zip_base = cd_start_abs - cd_offset; // смещение начала zip-потока в SFX-файле
+
+            return new EndOfCentralDirectory
+            {
+                CentralDirectorySize = cd_size,
+                CentralDirectoryOffset = cd_offset,
+                CommentLength = comment_len,
+                EocdAbsoluteOffset = eocd_abs,
+                CentralDirectoryAbsoluteStart = cd_start_abs,
+                ZipBaseOffset = zip_base
+            };
+        }
+    }
+    finally
+    {
+        ArrayPool<byte>.Shared.Return(buffer_array);
     }
 
     return null;
