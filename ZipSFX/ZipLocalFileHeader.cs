@@ -1,4 +1,6 @@
 ﻿using System.Text;
+using System;
+using System.IO;
 
 namespace ZipSFX;
 
@@ -50,7 +52,10 @@ internal class ZipLocalFileHeader
         var file_name_length = reader.ReadUInt16();
         ExtraFieldLength = reader.ReadUInt16();
 
-        FileName = Encoding.UTF8.GetString(reader.ReadBytes(file_name_length));
+        // Выбор кодировки имени файла: если установлен флаг UTF-8 (bit 11), используем UTF8, иначе CP437
+        var nameBytes = reader.ReadBytes(file_name_length);
+        var nameEncoding = (GeneralPurposeBitFlag & 0x0800) != 0 ? Encoding.UTF8 : Encoding.GetEncoding(437);
+        FileName = nameEncoding.GetString(nameBytes);
 
         // позиция начала данных файла
         DataStartRelativeOffset = 30 /*fixed header*/ + file_name_length + ExtraFieldLength; // 30 = 4+2+2+2+2+2+4+4+4+2+2
