@@ -384,8 +384,9 @@ static void CopyAllWithCrc(Stream Source, Stream Destination, CustomCRC Crc)
         int read;
         while ((read = Source.Read(buffer)) > 0)
         {
-            Destination.Write(buffer_array, 0, read);
-            Crc.Update(buffer_array, 0, read);
+            // Используем Span для обновления CRC и записи
+            Destination.Write(buffer[..read]);
+            Crc.Update(buffer[..read]);
         }
     }
     finally
