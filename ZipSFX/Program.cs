@@ -1,7 +1,8 @@
 ﻿using System.Buffers;
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
-
+using System.Diagnostics;
 using ZipSFX;
 
 // ------------------------------------------------------------
@@ -160,26 +161,32 @@ static EndOfCentralDirectory? FindEndOfCentralDirectory(Stream ExeStream)
 
         for (var i = buffer.Length - eocd_fixed; i >= 0; i--)
         {
-            if (MemoryMarshal.Read<uint>(buffer[i..]) != eocd_signature)
-                continue;
+            if (i + 4 > buffer.Length) continue;
+            var sig = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(i));
+            if (sig != eocd_signature) continue;
 
-            var span = buffer[i..];
-            var disk_no = MemoryMarshal.Read<ushort>(span[4..]);
-            var cd_disk_no = MemoryMarshal.Read<ushort>(span[6..]);
-            var disk_entries = MemoryMarshal.Read<ushort>(span[8..]);
-            var total_entries = MemoryMarshal.Read<ushort>(span[10..]);
-            var cd_size = MemoryMarshal.Read<uint>(span[12..]);
-            var cd_offset = MemoryMarshal.Read<uint>(span[16..]);
-            var comment_len = MemoryMarshal.Read<ushort>(span[20..]);
+            if (i + eocd_fixed > buffer.Length) continue;
 
-            // Поддерживаем только однотомные архивы
+            var disk_no = BinaryPrimitives.ReadUInt16LittleEndian(buffer.Slice(i + 4));
+            var cd_disk_no = BinaryPrimitives.ReadUInt16LittleEndian(buffer.Slice(i + 6));
+            var disk_entries = BinaryPrimitives.ReadUInt16LittleEndian(buffer.Slice(i + 8));
+            var total_entries = BinaryPrimitives.ReadUInt16LittleEndian(buffer.Slice(i + 10));
+            var cd_size = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(i + 12));
+            var cd_offset = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(i + 16));
+            var comment_len = BinaryPrimitives.ReadUInt16LittleEndian(buffer.Slice(i + 20));
+
+            // Поддерживаем только однотомные архивы; при расхождении продолжаем поиск
             if (disk_no != 0 || cd_disk_no != 0 || disk_entries != total_entries)
-                return null;
+                continue;
 
             var eocd_abs = search_start + i; // абсолютная позиция EOCD в файле
             var cd_end_abs = eocd_abs;       // центральный каталог заканчивается перед EOCD
             var cd_start_abs = cd_end_abs - cd_size;
             var zip_base = cd_start_abs - cd_offset; // смещение начала zip-потока в SFX-файле
+
+            // Проверка валидности вычисленных смещений
+            if (cd_start_abs < 0 || zip_base < 0) continue;
+            if (cd_start_abs > ExeStream.Length || zip_base > ExeStream.Length) continue;
 
             return new EndOfCentralDirectory
             {
