@@ -211,7 +211,16 @@ static void ExtractFile(Stream ZipStream, ZipCentralDirectoryEntry entry, long B
     if (entry.FileName.EndsWith('/'))
     {
         var dir_path = Path.Combine(DestinationRoot, entry.FileName.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(dir_path);
+        var fullDir = Path.GetFullPath(dir_path);
+        var baseFull = Path.GetFullPath(DestinationRoot);
+        if (!baseFull.EndsWith(Path.DirectorySeparatorChar)) baseFull += Path.DirectorySeparatorChar;
+        if (!fullDir.StartsWith(baseFull, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine($"Пропускаем каталог с потенциально небезопасным путём: {entry.FileName}");
+            return;
+        }
+
+        Directory.CreateDirectory(fullDir);
         return;
     }
 
@@ -228,11 +237,20 @@ static void ExtractFile(Stream ZipStream, ZipCentralDirectoryEntry entry, long B
     // Путь к файлу назначения
     var rel_path = entry.FileName.Replace('/', Path.DirectorySeparatorChar);
     var target_path = Path.Combine(DestinationRoot, rel_path);
-    var file_dir = Path.GetDirectoryName(target_path);
+    var fullTarget = Path.GetFullPath(target_path);
+    var baseFullTarget = Path.GetFullPath(DestinationRoot);
+    if (!baseFullTarget.EndsWith(Path.DirectorySeparatorChar)) baseFullTarget += Path.DirectorySeparatorChar;
+    if (!fullTarget.StartsWith(baseFullTarget, StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine($"Пропускаем распаковку файла с потенциально небезопасным путём: {entry.FileName}");
+        return;
+    }
+
+    var file_dir = Path.GetDirectoryName(fullTarget);
     if (!string.IsNullOrEmpty(file_dir))
         Directory.CreateDirectory(file_dir);
 
-    using var file_stream = File.Create(target_path);
+    using var file_stream = File.Create(fullTarget);
     var crc = new CustomCRC();
 
     switch (entry.CompressionMethod)
