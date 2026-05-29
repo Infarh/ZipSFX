@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>zsfx</AssemblyName>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>0.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy.Mdd.Hmm"))</Version>
