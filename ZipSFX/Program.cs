@@ -328,7 +328,8 @@ static void CopyLimitedWithCrc(Stream Source, Stream Destination, uint Count, Cu
         {
             var to_read = (int)Math.Min(buffer.Length, remaining);
             var read = Source.Read(buffer[..to_read]);
-            if (read <= 0) break;
+            if (read <= 0)
+                throw new EndOfStreamException("Неожиданный конец потока при копировании файла");
 
             Destination.Write(buffer[..read]);
             Crc.Update(buffer[..read]);
