@@ -22,14 +22,21 @@ if (args is [{ Length: > 0 } arg0, ..])
         return;
     }
 
-    // Иначе — это путь распаковки (каталог). Если по этому пути лежит zip-файл — это конфликт, но по ТЗ трактуем как режим слияния
-    if (File.Exists(arg0) && string.Equals(Path.GetExtension(arg0), ".zip", StringComparison.OrdinalIgnoreCase))
+    // Если указан существующий каталог — распаковываем в него
+    if (Directory.Exists(arg0))
     {
-        CreateSfxArchive(arg0);
+        ExtractArchive(arg0);
         return;
     }
 
-    // Иначе — распаковка в указанный каталог (создадим при необходимости)
+    // Если указан путь к файлу, но он не .zip — сообщаем об ошибке
+    if (File.Exists(arg0))
+    {
+        Console.WriteLine($"Файл {arg0} существует и не является zip-архивом.");
+        return;
+    }
+
+    // Иначе трактуем аргумент как путь назначения распаковки (включая несуществующие каталоги)
     ExtractArchive(arg0);
     return;
 }
@@ -54,7 +61,30 @@ Console.WriteLine(hint_str);
 return;
 
 ///// <summary>Возвращает путь к текущему исполняемому файлу</summary>
-static string GetCurrentAppFilePath() => Path.Combine(AppContext.BaseDirectory, $"{AppDomain.CurrentDomain.FriendlyName}.exe");
+static string GetCurrentAppFilePath()
+{
+    // Попробуем использовать Environment.ProcessPath (доступно в новых рантаймах)
+    try
+    {
+        if (!string.IsNullOrEmpty(Environment.ProcessPath))
+            return Environment.ProcessPath;
+    }
+    catch { }
+
+    try
+    {
+        using var proc = Process.GetCurrentProcess();
+        var path = proc.MainModule?.FileName;
+        if (!string.IsNullOrEmpty(path))
+            return path;
+    }
+    catch { }
+
+    // Фоллбэк: предполагаем имя exe в AppContext.BaseDirectory
+    var friendly = AppDomain.CurrentDomain.FriendlyName;
+    var suffix = RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ? ".exe" : string.Empty;
+    return Path.Combine(AppContext.BaseDirectory, friendly + suffix);
+}
 
 ///// <summary>Определяет, присоединён ли к текущему exe архив</summary>
 static bool HasAttachedArchive()
