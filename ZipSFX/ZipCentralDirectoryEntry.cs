@@ -54,7 +54,9 @@ internal class ZipCentralDirectoryEntry
         _ = reader.ReadUInt32();                 // external file attributes
         LocalHeaderOffset = reader.ReadUInt32();
 
-        FileName = Encoding.UTF8.GetString(reader.ReadBytes(file_name_length));
+        var nameBytes = reader.ReadBytes(file_name_length);
+        var nameEncoding = (GeneralPurposeBitFlag & 0x0800) != 0 ? Encoding.UTF8 : Encoding.GetEncoding(437);
+        FileName = nameEncoding.GetString(nameBytes);
         if (extra_field_length > 0)
             reader.ReadBytes(extra_field_length);
         if (file_comment_length > 0)
